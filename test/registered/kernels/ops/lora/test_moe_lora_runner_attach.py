@@ -58,7 +58,13 @@ class TestEngineAdmission(CustomTestCase):
 
         assert MoeLoraRunner._weight_family(self._base_layer()) == "bf16"
 
-    def _fp8_layer(self, *, block_quant=True, weight_dtype=torch.float8_e4m3fn):
+    def _fp8_layer(
+        self,
+        *,
+        block_quant=True,
+        weight_dtype=torch.float8_e4m3fn,
+        params_dtype=torch.bfloat16,
+    ):
         from sglang.srt.layers.quantization.fp8 import Fp8MoEMethod
 
         layer = self._base_layer()
@@ -67,9 +73,33 @@ class TestEngineAdmission(CustomTestCase):
         quant_method.use_mxfp8 = False
         quant_method.weight_block_size = [128, 128] if block_quant else None
         layer.quant_method = quant_method
+        layer.params_dtype = params_dtype
         layer.w13_weight = layer.w13_weight.to(weight_dtype)
         layer.w2_weight = layer.w2_weight.to(weight_dtype)
         return layer
+
+    def test_weight_family_of_a_block_fp8_layer(self):
+        from sglang.srt.lora.moe.runner import MoeLoraRunner
+
+        assert MoeLoraRunner._weight_family(self._fp8_layer()) == "fp8"
+
+    def test_rejects_fp16_fp8_activations(self):
+        from sglang.srt.lora.moe.runner import MoeLoraRunner
+
+        with self.assertRaisesRegex(NotImplementedError, "BF16 activations"):
+            MoeLoraRunner._weight_family(self._fp8_layer(params_dtype=torch.float16))
+
+    def test_rejects_per_tensor_fp8(self):
+        from sglang.srt.lora.moe.runner import MoeLoraRunner
+
+        with self.assertRaisesRegex(NotImplementedError, "128-block"):
+            MoeLoraRunner._weight_family(self._fp8_layer(block_quant=False))
+
+    def test_rejects_marlin_repacked_fp8(self):
+        from sglang.srt.lora.moe.runner import MoeLoraRunner
+
+        with self.assertRaisesRegex(NotImplementedError, "float8_e4m3fn"):
+            MoeLoraRunner._weight_family(self._fp8_layer(weight_dtype=torch.bfloat16))
 
     def test_every_listed_vendor_resolves_and_others_fall_back_to_the_first(self):
         """Mixed-quant layers resolve independently, falling back to their family's vendor."""

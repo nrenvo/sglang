@@ -41,6 +41,46 @@ class _ContiguousRowStateStub(msgspec.Struct, kw_only=True):
 
 
 class TestProviderGeometry(CustomTestCase):
+    def test_triton_fp8_k_tiles_stay_within_scale_groups(self):
+        source = _function((PROVIDER / "triton_bf16.py").read_text(), "_config_for")
+        namespace = {}
+        exec("from __future__ import annotations\n" + source, namespace)
+        config_for = namespace["_config_for"]
+        module = types.ModuleType(
+            "sglang.srt.layers.moe.moe_runner.triton_utils.fused_moe_triton_config"
+        )
+        for block_shape, block_k in (
+            ([128, 128], 256),
+            ([128, 128], 32),
+            ([128, 128], 64),
+            ([128, 128], 128),
+            (None, 256),
+        ):
+            with self.subTest(block_shape=block_shape, block_k=block_k):
+                original = {"BLOCK_SIZE_K": block_k, "USE_TMA": True}
+                upstream = (dict(original), dict(original))
+                module.try_get_optimal_moe_config = mock.Mock(
+                    return_value=(upstream[0], (upstream[1], None))
+                )
+                provider = SimpleNamespace(
+                    quant_info=SimpleNamespace(
+                        w13_weight=SimpleNamespace(shape=(2, 256, 128)),
+                        w2_weight=SimpleNamespace(shape=(2, 128, 128)),
+                    ),
+                    _config_dtype_tag="fp8_w8a8" if block_shape else None,
+                    _config_block_shape=block_shape,
+                    _configs={},
+                )
+                with mock.patch.dict(sys.modules, {module.__name__: module}):
+                    resolved = config_for(provider, 32, 2)
+                    self.assertIs(config_for(provider, 32, 2), resolved)
+                expected_k = min(block_k, 128) if block_shape else block_k
+                for actual, cached in zip(resolved, upstream):
+                    self.assertEqual(actual, {"BLOCK_SIZE_K": expected_k})
+                    self.assertEqual(cached, original)
+                    self.assertIsNot(actual, cached)
+                module.try_get_optimal_moe_config.assert_called_once()
+
     def test_cutedsl_schedule_uses_the_resident_slice_count(self):
         """Resident weight width, not activation, determines one- versus two-slice GEMM1."""
 
