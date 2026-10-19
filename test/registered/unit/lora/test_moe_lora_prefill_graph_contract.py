@@ -98,6 +98,35 @@ def _load_function(
     return scope[function_name]
 
 
+@pytest.mark.parametrize("has_w13_weight", (False, True))
+def test_legacy_moe_buffers_use_prepared_quant_info_device(has_w13_weight):
+    backend_type = _load_class_with_members(
+        BASE_BACKEND_PATH,
+        "BaseLoRABackend",
+        "init_cuda_graph_moe_buffers",
+        namespace={"torch": torch},
+    )
+    quant_info = SimpleNamespace(w13_qweight=torch.empty(1, device="meta"))
+    if has_w13_weight:
+        quant_info.w13_weight = torch.empty(1)
+    expected_device = "cpu" if has_w13_weight else "meta"
+    layer = SimpleNamespace(
+        _quant_info=quant_info,
+        base_layer=SimpleNamespace(
+            top_k=2,
+            num_experts=4,
+            w13_weight=torch.empty(1, device="meta" if has_w13_weight else "cpu"),
+        ),
+    )
+    backend = backend_type()
+    backend.init_cuda_graph_moe_buffers(8, 2, torch.bfloat16, layer)
+    assert backend.moe_cg_buffers
+    assert all(
+        buffer.device.type == expected_device
+        for buffer in backend.moe_cg_buffers.values()
+    )
+
+
 def test_v2_bypasses_legacy_moe_preallocation():
     reserve = _load_function(
         REPO_ROOT / "python/sglang/srt/lora/lora_manager.py",
