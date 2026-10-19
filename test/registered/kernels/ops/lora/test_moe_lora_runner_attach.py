@@ -106,13 +106,15 @@ class TestEngineAdmission(CustomTestCase):
         from sglang.srt.lora.moe.base_gemm_provider import VENDORS
 
         every_vendor = {vendor for vendors in VENDORS.values() for vendor in vendors}
+        every_vendor.add("deepgemm")
         for family, vendors in VENDORS.items():
-            default = select_provider_cls("route_major", family)
-            assert default is select_provider_cls("route_major", family, vendors[0])
-            for vendor in vendors:
-                assert select_provider_cls("expert_major", family, vendor)
-            for other in every_vendor - set(vendors):
-                assert select_provider_cls("route_major", family, other) is default
+            for rows in ("expert_major", "route_major"):
+                default = select_provider_cls(rows, family)
+                assert default is select_provider_cls(rows, family, vendors[0])
+                for vendor in vendors:
+                    assert select_provider_cls(rows, family, vendor)
+                for other in every_vendor - set(vendors):
+                    assert select_provider_cls(rows, family, other) is default
 
     def test_rejects_architectures_with_neither_mma_family(self):
         """SM90 and SM100 are a closed set, not a floor: SM120 reports major 12
